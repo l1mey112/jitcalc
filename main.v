@@ -6,16 +6,19 @@ struct Lexer {
 	line string
 mut:
 	pos int
-	tok_lit string
 	tok Op
+	tok_lit string
+	peek Op
+	peek_lit string
 }
 
-fn (mut l Lexer) next() Op {
+fn (mut l Lexer) get() (Op, string) {
 	for l.pos < l.line.len {
 		mut ch := l.line[l.pos]
 		l.pos++
 		if ch.is_space() { continue }
 
+		mut word := ''
 		op := match ch {
 			`+` { Op.add }
 			`-` { Op.sub }
@@ -36,7 +39,7 @@ fn (mut l Lexer) next() Op {
 					}
 					break
 				}
-				l.tok_lit = l.line[start..l.pos]
+				word = l.line[start..l.pos]
 
 				if isnum {
 					Op.num
@@ -45,28 +48,72 @@ fn (mut l Lexer) next() Op {
 				}
 			}
 		}
-		l.tok = op
-		return op
+		return op, word
 	}
-	l.tok = .eof
-	return .eof
+	return Op.eof, ''
 }
 
-fn main() {
+fn (mut l Lexer) next() Op {
+	l.tok, l.tok_lit = l.peek, l.peek_lit
+	l.peek, l.peek_lit = l.get()
+	return l.tok
+}
+
+fn parse(mut o []Op, mut l &Lexer, min_bp int) {
+	bbee := match l.next() {
+		.ident, .num {
+			l.tok_lit
+		}
+		else {
+			panic("expected identifier or number")
+		}
+	}
+
+	for {
+		if l.peek == .eof {
+			break
+		}
+
+		l_bp, r_bp := match l.peek {
+			.add, .sub { 1, 2 }
+			.mul, .div { 3, 4 }
+			else {
+				panic("expected operator")
+			}
+		}
+		if l_bp < min_bp {
+			break
+		}
+
+		println('${l.peek}')
+		l.next()
+		parse(mut o, mut l, r_bp)
+	}
+	println(bbee)
+}
+
+fn main1() {
 	mut r := readline.Readline{}
 	
 	for {
 		mut l := Lexer {
 			line: r.read_line(">>> ") or {
-				println("goodbye!")
+				println("exit")
 				break
 			}
 		}
-		for l.next() != .eof {
-			println(l.tok)
-			if l.tok in [.num, .ident] {
-				println("\t`${l.tok_lit.bytes()}`")
-			}
-		}
+		l.next()
+		mut oparr := []Op{}
+		parse(mut oparr, mut &l, 0)
 	}
+}
+
+fn main() {
+	mut prg := create_program()
+
+	prg.write([u8(0xc3)])
+
+	prg.finalise()
+	prg.free()
+	println(prg)
 }
