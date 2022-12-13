@@ -111,9 +111,12 @@ fn main1() {
 fn main() {
 	mut prg := create_program()
 
-	prg.write([u8(0xc3)])
+	// create program
+	prg.mov64_rax(2222222)
+	prg.ret()
 
-	prg.finalise()
-	prg.free()
-	println(prg)
+	a := prg.finalise()
+
+	println(a)
+	println("${a()}")
 }
