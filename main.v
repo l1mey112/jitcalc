@@ -167,7 +167,7 @@ fn gen(node &Expr, mut prg JitProgram) {
 				prg.comment('cqo')
 				prg.code << [u8(0x48), 0x99]
 				prg.comment('idiv rcx')
-				prg.code << [u8(0x48), 0xF7, 0xF9, 0xC1]
+				prg.code << [u8(0x48), 0xF7, 0xF9]
 			}
 			else {
 				panic("unreachable")

@@ -78,7 +78,7 @@ fn (mut p JitProgram) free() {
 }
 
 fn (mut p JitProgram) hexdump() {
-	maxsize := 31
+	maxsize := 40
 	mut sb := strings.new_builder(80)
 
 	mut c := 1
