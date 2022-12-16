@@ -1,4 +1,5 @@
 import readline
+import term
 
 enum Op { eof ident num add sub mul div }
 
@@ -59,10 +60,18 @@ fn (mut l Lexer) next() Op {
 	return l.tok
 }
 
-fn parse(mut o []Op, mut l &Lexer, min_bp int) {
-	bbee := match l.next() {
-		.ident, .num {
-			l.tok_lit
+struct Expr {
+	lhs &Expr = unsafe { nil }
+	rhs &Expr = unsafe { nil }
+	op  Op
+	val string
+}
+
+fn expr(mut prg JitProgram, mut l Lexer, min_bp int) &Expr {
+	l.next()
+	mut lhs := match l.tok {
+		.num, .ident {
+			&Expr{op: l.tok, val: l.tok_lit}
 		}
 		else {
 			panic("expected identifier or number")
@@ -73,7 +82,6 @@ fn parse(mut o []Op, mut l &Lexer, min_bp int) {
 		if l.peek == .eof {
 			break
 		}
-
 		l_bp, r_bp := match l.peek {
 			.add, .sub { 1, 2 }
 			.mul, .div { 3, 4 }
@@ -84,16 +92,93 @@ fn parse(mut o []Op, mut l &Lexer, min_bp int) {
 		if l_bp < min_bp {
 			break
 		}
-
-		println('${l.peek}')
 		l.next()
-		parse(mut o, mut l, r_bp)
+		
+		op := l.tok
+		lhs = &Expr{
+			lhs: lhs,
+			rhs: expr(mut prg, mut l, r_bp),
+			op: op
+		}
 	}
-	println(bbee)
+
+	return lhs
 }
 
-fn main1() {
+fn march(node &Expr, dep int) {
+	if dep != 0 {
+		c := dep - 1
+		print("${` `.repeat(c * 3)}└─ ")
+	}
+	match node.op {
+		.num, .ident {
+			println("`${node.val}`")
+		}
+		else {
+			println(node.op)
+		}
+	}
+	if !isnil(node.lhs) {
+		march(node.lhs, dep + 1)
+	}
+	if !isnil(node.rhs) {
+		march(node.rhs, dep + 1)
+	}
+}
+
+// 4801C8            add rax,rcx
+// 4829C8            sub rax,rcx
+// 480FAFC1          imul rax,rcx
+// 4899              cqo
+// 48F7F9            idiv rcx
+
+fn gen(node &Expr, mut prg JitProgram) {
+	match node.op {
+		.num {
+			prg.mov64_rax(node.val.i64())
+			return
+		}
+		.ident {
+			panic("IDENT UNIMPLEMENTED")
+			return
+		}
+		else {}
+	}
+	if !isnil(node.rhs) {
+		gen(node.rhs, mut prg)
+		prg.push_rax()
+		gen(node.lhs, mut prg)
+		prg.pop_rcx()
+
+		match node.op {
+			.add {
+				prg.comment('add rax, rcx')
+				prg.code << [u8(0x48), 0x01, 0xC8]
+			}
+			.sub {
+				prg.comment('sub rax, rcx')
+				prg.code << [u8(0x48), 0x29, 0xC8]
+			}
+			.mul {
+				prg.comment('imul rax, rcx')
+				prg.code << [u8(0x48), 0x0F, 0xAF, 0xC1]
+			}
+			.div {
+				prg.comment('cqo')
+				prg.code << [u8(0x48), 0x99]
+				prg.comment('idiv rcx')
+				prg.code << [u8(0x48), 0xF7, 0xF9, 0xC1]
+			}
+			else {
+				panic("unreachable")
+			}
+		}
+	}
+}
+
+fn main() {
 	mut r := readline.Readline{}
+	mut prg := create_program()
 	
 	for {
 		mut l := Lexer {
@@ -103,20 +188,19 @@ fn main1() {
 			}
 		}
 		l.next()
-		mut oparr := []Op{}
-		parse(mut oparr, mut &l, 0)
+		if l.peek == .eof {
+			continue
+		}
+		root := expr(mut prg, mut l, 0)
+		// march(root, 0)
+		gen(root, mut prg)
+		prg.ret()
+		prg.hexdump()
+		
+		fnptr := prg.finalise()
+		value := fnptr()
+
+		println("${term.bold(term.green(value.str()))}")
+		prg.reset()
 	}
-}
-
-fn main() {
-	mut prg := create_program()
-
-	// create program
-	prg.mov64_rax(2222222)
-	prg.ret()
-
-	a := prg.finalise()
-
-	println(a)
-	println("${a()}")
 }
