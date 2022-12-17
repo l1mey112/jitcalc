@@ -217,15 +217,28 @@ fn main() {
 	mut r := readline.Readline{}
 	mut prg := create_program()
 	mut symtable := map[string]&Box[i64]
+	mut showast := false
+
+	println("jitcalc  Copyright (C) 2022  l-m.dev")
+	println(term.magenta("Type `help` for more information.\n"))
 
 	for {
 		line := r.read_line(">>> ") or {
-			println("exit")
 			break
 		}
 		match line.trim_space() {
 			'clear' { term.clear() continue }
 			'reset' { symtable.clear() continue }
+			'ast'   { showast = !showast continue }
+			'exit'  { break }
+			'help'  {
+				println(term.magenta(" clear   | Clear the screen."))
+				println(term.magenta(" reset   | Undeclare all variables."))
+				println(term.magenta(" ast     | Toggle printing AST representation."))
+				println(term.magenta(" help    | Show this message."))
+				println(term.magenta(" exit    | Goodbye!"))
+				continue
+			}
 			else {}
 		}
 		mut l := Lexer {
@@ -241,10 +254,13 @@ fn main() {
 		}
 		gen(root, mut prg, mut symtable) or {
 			println(term.fail_message(err.str()))
+			prg.reset()
 			continue
 		}
-		march(root, 0)
-		println(term.cyan('------------------------------------------------------------'))
+		if showast {
+			march(root, 0)
+			println(term.cyan('------------------------------------------------------------'))
+		}
 		prg.ret()
 		prg.hexdump()
 
@@ -257,4 +273,5 @@ fn main() {
 
 		prg.reset()
 	}
+	println("goodbye!")
 }
