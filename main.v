@@ -1,7 +1,7 @@
 import readline
 import term
 
-enum Op { eof ident num add sub mul div }
+enum Op { eof ident assign num add sub mul div }
 
 struct Lexer {
 	line string
@@ -21,14 +21,16 @@ fn (mut l Lexer) get() (Op, string) {
 
 		mut word := ''
 		op := match ch {
-			`+` { Op.add }
-			`-` { Op.sub }
-			`*` { Op.mul }
-			`/` { Op.div }
+			`+` { Op.add    }
+			`-` { Op.sub    }
+			`*` { Op.mul    }
+			`/` { Op.div    }
+			`=` { Op.assign }
 			else {
 				mut isnum := true
 
-				start := l.pos - 1
+				l.pos--
+				start := l.pos
 				for l.pos < l.line.len {
 					ch = l.line[l.pos]
 					if (ch >= `a` && ch <= `z`) || (ch >= `A` && ch <= `Z`) || (ch >= `0` && ch <= `9`) || ch == `_` {				
@@ -67,26 +69,34 @@ struct Expr {
 	val string
 }
 
-fn expr(mut prg JitProgram, mut l Lexer, min_bp int) &Expr {
+fn perror(msg string)! {
+	return error(msg)
+}
+
+fn expr(mut prg JitProgram, mut l Lexer, min_bp int) !&Expr {
 	l.next()
-	mut lhs := match l.tok {
-		.num, .ident {
-			&Expr{op: l.tok, val: l.tok_lit}
-		}
-		else {
-			panic("expected identifier or number")
-		}
+	if l.tok !in [.num, .ident] {
+		return error("Syntax Error: expected identifier or number")
 	}
+	mut lhs := &Expr{op: l.tok, val: l.tok_lit}
 
 	for {
 		if l.peek == .eof {
 			break
 		}
 		l_bp, r_bp := match l.peek {
-			.add, .sub { 1, 2 }
-			.mul, .div { 3, 4 }
+			.assign {
+				if lhs.op != .ident {
+					return error("Syntax Error: cannot assign to a value literal")
+				}
+				2, 1
+			}
+			.add, .sub { 3, 4 }
+			.mul, .div { 5, 6 }
 			else {
-				panic("expected operator")
+				perror("Syntax Error: expected operator")!
+				0, 0
+				// return error("Syntax Error: expected operator after value literal")
 			}
 		}
 		if l_bp < min_bp {
@@ -97,7 +107,7 @@ fn expr(mut prg JitProgram, mut l Lexer, min_bp int) &Expr {
 		op := l.tok
 		lhs = &Expr{
 			lhs: lhs,
-			rhs: expr(mut prg, mut l, r_bp),
+			rhs: expr(mut prg, mut l, r_bp)!,
 			op: op
 		}
 	}
@@ -126,14 +136,37 @@ fn march(node &Expr, dep int) {
 	}
 }
 
-fn gen(node &Expr, mut prg JitProgram) {
+struct Box[T] {
+	v T
+}
+
+fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
 	match node.op {
 		.num {
 			prg.mov64_rax(node.val.i64())
 			return
 		}
+		.assign {
+			gen(node.rhs, mut prg, mut symtable)!
+			if node.lhs.val !in symtable {
+				symtable[node.lhs.val] = &Box[i64]{0}
+			}
+			prg.mov64_rcx(voidptr(&symtable[node.lhs.val].v))
+			prg.comments.last().comment = 'mov rcx, &${node.lhs.val}'
+
+			prg.comment('mov [rcx], rax')
+			prg.code << [u8(0x48), 0x89, 0x01]
+			return
+		}
 		.ident {
-			panic("IDENT UNIMPLEMENTED")
+			if node.val !in symtable {
+				return error("Gen: identifier `${node.val}` not defined")
+			}
+			prg.mov64_rax(voidptr(symtable[node.val]))
+			prg.comments.last().comment = 'mov rax, &${node.val}'
+
+			prg.comment("mov rax, [rax]")
+			prg.code << [u8(0x48), 0x8B, 0x00]
 			return
 		}
 		else {}
@@ -143,12 +176,12 @@ fn gen(node &Expr, mut prg JitProgram) {
 			prg.mov64_rcx(node.rhs.val.i64())
 			prg.mov64_rax(node.lhs.val.i64())
 		} else {
-			gen(node.rhs, mut prg)
+			gen(node.rhs, mut prg, mut symtable)!
 
 			prg.comment('push rax')
 			prg.code << 0x50
 			
-			gen(node.lhs, mut prg)
+			gen(node.lhs, mut prg, mut symtable)!
 
 			prg.comment('pop rcx')
 			prg.code << 0x59
@@ -183,7 +216,8 @@ fn gen(node &Expr, mut prg JitProgram) {
 fn main() {
 	mut r := readline.Readline{}
 	mut prg := create_program()
-	
+	mut symtable := map[string]&Box[i64]
+
 	for {
 		line := r.read_line(">>> ") or {
 			println("exit")
@@ -191,6 +225,7 @@ fn main() {
 		}
 		match line.trim_space() {
 			'clear' { term.clear() continue }
+			'reset' { symtable.clear() continue }
 			else {}
 		}
 		mut l := Lexer {
@@ -200,17 +235,26 @@ fn main() {
 		if l.peek == .eof {
 			continue
 		}
-		root := expr(mut prg, mut l, 0)
+		root := expr(mut prg, mut l, 0) or {
+			println(term.fail_message(err.str()))
+			continue
+		}
+		gen(root, mut prg, mut symtable) or {
+			println(term.fail_message(err.str()))
+			continue
+		}
 		march(root, 0)
-		println(term.cyan(term.h_divider('-')))
-		gen(root, mut prg)
+		println(term.cyan('------------------------------------------------------------'))
 		prg.ret()
 		prg.hexdump()
-		
+
 		fnptr := prg.finalise()
 		value := fnptr()
 
-		println("${term.bold(term.green(value.str()))}")
+		if root.op != .assign {
+			println("${term.bold(term.green(value.str()))}")
+		}
+
 		prg.reset()
 	}
 }

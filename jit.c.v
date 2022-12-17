@@ -12,8 +12,9 @@ fn C.munmap(ptr voidptr, size usize) int
 fn C.mprotect(addr voidptr, len usize, prot int) int
 
 struct Comment {
-	comment string
 	pos int
+mut:
+	comment string
 }
 
 struct JitProgram {
