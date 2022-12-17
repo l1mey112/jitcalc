@@ -1,7 +1,7 @@
 import readline
 import term
 
-enum Op { eof ident assign num add sub mul div }
+enum Op { eof ident assign obr cbr num add sub mul div }
 
 struct Lexer {
 	line string
@@ -26,6 +26,8 @@ fn (mut l Lexer) get() (Op, string) {
 			`*` { Op.mul    }
 			`/` { Op.div    }
 			`=` { Op.assign }
+			`(` { Op.obr    }
+			`)` { Op.cbr    }
 			else {
 				mut isnum := true
 
@@ -73,15 +75,27 @@ fn perror(msg string)! {
 	return error(msg)
 }
 
-fn expr(mut prg JitProgram, mut l Lexer, min_bp int) !&Expr {
+fn expr(mut l Lexer, min_bp int) !&Expr {
 	l.next()
-	if l.tok !in [.num, .ident] {
-		return error("Syntax Error: expected identifier or number")
+	mut lhs := match l.tok {
+		.num, .ident {
+			&Expr{op: l.tok, val: l.tok_lit}
+		}
+		.obr {
+			o_lhs := expr(mut l, 0)!
+			if l.next() != .cbr {
+				perror("Syntax Error: expected closing brace")!
+			}
+			o_lhs
+		}
+		else {
+			perror("Syntax Error: expected identifier or number")!
+			0
+		}
 	}
-	mut lhs := &Expr{op: l.tok, val: l.tok_lit}
 
 	for {
-		if l.peek == .eof {
+		if l.peek in [.eof, .obr, .cbr] {
 			break
 		}
 		l_bp, r_bp := match l.peek {
@@ -107,7 +121,7 @@ fn expr(mut prg JitProgram, mut l Lexer, min_bp int) !&Expr {
 		op := l.tok
 		lhs = &Expr{
 			lhs: lhs,
-			rhs: expr(mut prg, mut l, r_bp)!,
+			rhs: expr(mut l, r_bp)!,
 			op: op
 		}
 	}
@@ -248,9 +262,12 @@ fn main() {
 		if l.peek == .eof {
 			continue
 		}
-		root := expr(mut prg, mut l, 0) or {
+		root := expr(mut l, 0) or {
 			println(term.fail_message(err.str()))
 			continue
+		}
+		if l.peek != .eof {
+			panic("ee")
 		}
 		gen(root, mut prg, mut symtable) or {
 			println(term.fail_message(err.str()))
