@@ -1,7 +1,7 @@
 import readline
 import term
 
-enum Op { eof ident assign obr cbr num add sub mul div }
+enum Op { eof ident assign obr cbr num add sub mul div mod }
 
 struct Lexer {
 	line string
@@ -25,6 +25,7 @@ fn (mut l Lexer) get() (Op, string) {
 			`-` { Op.sub    }
 			`*` { Op.mul    }
 			`/` { Op.div    }
+			`%` { Op.mod    }
 			`=` { Op.assign }
 			`(` { Op.obr    }
 			`)` { Op.cbr    }
@@ -105,8 +106,8 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 				}
 				2, 1
 			}
-			.add, .sub { 3, 4 }
-			.mul, .div { 5, 6 }
+			.add, .sub       { 3, 4 }
+			.mul, .div, .mod { 5, 6 }
 			else {
 				perror("Syntax Error: expected operator")!
 				0, 0
@@ -154,6 +155,13 @@ struct Box[T] {
 	v T
 }
 
+fn var_to_rax(mut prg JitProgram, mut symtable map[string]&Box[i64], val string) {
+	prg.mov64_rax(voidptr(symtable[val]))
+	prg.comments.last().comment = 'mov rax, &${val}'
+	prg.comment("mov rax, [rax]")
+	prg.code << [u8(0x48), 0x8B, 0x00]
+}
+
 fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
 	match node.op {
 		.num {
@@ -163,7 +171,7 @@ fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
 		.assign {
 			gen(node.rhs, mut prg, mut symtable)!
 			if node.lhs.val !in symtable {
-				symtable[node.lhs.val] = &Box[i64]{0}
+				symtable[node.lhs.val] = &Box[i64]{ v: 0 }
 			}
 			prg.mov64_rcx(voidptr(&symtable[node.lhs.val].v))
 			prg.comments.last().comment = 'mov rcx, &${node.lhs.val}'
@@ -176,22 +184,26 @@ fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
 			if node.val !in symtable {
 				return error("Gen: identifier `${node.val}` not defined")
 			}
-			prg.mov64_rax(voidptr(symtable[node.val]))
-			prg.comments.last().comment = 'mov rax, &${node.val}'
 
-			prg.comment("mov rax, [rax]")
-			prg.code << [u8(0x48), 0x8B, 0x00]
+			var_to_rax(mut prg, mut symtable, node.val)
 			return
 		}
 		else {}
 	}
 	if !isnil(node.rhs) {
-		if node.rhs.op == .num && node.lhs.op == .num {
-			prg.mov64_rcx(node.rhs.val.i64())
-			prg.mov64_rax(node.lhs.val.i64())
-		} else {
-			gen(node.rhs, mut prg, mut symtable)!
+		gen(node.rhs, mut prg, mut symtable)!
 
+		if node.lhs.op == .num {
+			prg.comment('mov rcx, rax')
+			prg.code << [u8(0x48), 0x89, 0xC1]
+
+			prg.mov64_rax(node.lhs.val.i64())
+		} else if node.lhs.op == .ident {
+			prg.comment('mov rcx, rax')
+			prg.code << [u8(0x48), 0x89, 0xC1]
+
+			var_to_rax(mut prg, mut symtable, node.lhs.val)
+		} else {
 			prg.comment('push rax')
 			prg.code << 0x50
 			
@@ -214,11 +226,15 @@ fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
 				prg.comment('imul rax, rcx')
 				prg.code << [u8(0x48), 0x0F, 0xAF, 0xC1]
 			}
-			.div {
+			.div, .mod {
 				prg.comment('cqo')
 				prg.code << [u8(0x48), 0x99]
 				prg.comment('idiv rcx')
 				prg.code << [u8(0x48), 0xF7, 0xF9]
+				if node.op == .mod {
+					prg.comment('mov rax, rdx')
+					prg.code << [u8(0x48), 0x89, 0xD0]
+				}
 			}
 			else {
 				panic("unreachable")
