@@ -120,31 +120,25 @@ fn (mut p JitProgram) write64(n i64) {
 }
 
 fn (mut p JitProgram) mov64_rax(val i64) {
-	p.comment('mov rax, ${val}')
-	p.code << 0x48
-	p.code << 0xb8
-	p.write64(val)
+	if val == 0 {
+		p.comment('xor rax, rax')
+		p.code << [u8(0x48), 0x31, 0xC0]
+	} else {
+		p.comment('mov rax, ${val}')
+		p.code << 0x48
+		p.code << 0xb8
+		p.write64(val)
+	}
 }
 
 fn (mut p JitProgram) mov64_rcx(val i64) {
-	p.comment('mov rcx, ${val}')
-	p.code << 0x48
-	p.code << 0xc7
-	p.code << 0xc1
-	p.write64(val)
-}
-
-fn (mut p JitProgram) push_rax() {
-	p.comment('push rax')
-	p.code << 0x50
-}
-
-fn (mut p JitProgram) pop_rcx() {
-	p.comment('pop rcx')
-	p.code << 0x59
-}
-
-fn (mut p JitProgram) add() {
-	p.comment('pop rcx')
-	p.code << 0x59
+	if val == 0 {
+		p.comment('xor rcx, rcx')
+		p.code << [u8(0x48), 0x31, 0xC9]
+	} else {
+		p.comment('mov rcx, ${val}')
+		p.code << 0x48
+		p.code << 0xb9
+		p.write64(val)
+	}
 }

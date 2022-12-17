@@ -126,12 +126,6 @@ fn march(node &Expr, dep int) {
 	}
 }
 
-// 4801C8            add rax,rcx
-// 4829C8            sub rax,rcx
-// 480FAFC1          imul rax,rcx
-// 4899              cqo
-// 48F7F9            idiv rcx
-
 fn gen(node &Expr, mut prg JitProgram) {
 	match node.op {
 		.num {
@@ -145,10 +139,20 @@ fn gen(node &Expr, mut prg JitProgram) {
 		else {}
 	}
 	if !isnil(node.rhs) {
-		gen(node.rhs, mut prg)
-		prg.push_rax()
-		gen(node.lhs, mut prg)
-		prg.pop_rcx()
+		if node.rhs.op == .num && node.lhs.op == .num {
+			prg.mov64_rcx(node.rhs.val.i64())
+			prg.mov64_rax(node.lhs.val.i64())
+		} else {
+			gen(node.rhs, mut prg)
+
+			prg.comment('push rax')
+			prg.code << 0x50
+			
+			gen(node.lhs, mut prg)
+
+			prg.comment('pop rcx')
+			prg.code << 0x59
+		}
 
 		match node.op {
 			.add {
@@ -181,18 +185,24 @@ fn main() {
 	mut prg := create_program()
 	
 	for {
+		line := r.read_line(">>> ") or {
+			println("exit")
+			break
+		}
+		match line.trim_space() {
+			'clear' { term.clear() continue }
+			else {}
+		}
 		mut l := Lexer {
-			line: r.read_line(">>> ") or {
-				println("exit")
-				break
-			}
+			line: line
 		}
 		l.next()
 		if l.peek == .eof {
 			continue
 		}
 		root := expr(mut prg, mut l, 0)
-		// march(root, 0)
+		march(root, 0)
+		println(term.cyan(term.h_divider('-')))
 		gen(root, mut prg)
 		prg.ret()
 		prg.hexdump()
