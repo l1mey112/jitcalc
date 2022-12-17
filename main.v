@@ -1,7 +1,7 @@
 import readline
 import term
 
-enum Op { eof ident assign obr cbr num add sub mul div mod }
+enum Op { eof uneg ident assign obr cbr num add sub mul div mod }
 
 struct Lexer {
 	line string
@@ -90,8 +90,19 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 			o_lhs
 		}
 		else {
-			perror("Syntax Error: expected identifier or number")!
-			0
+			match l.tok {
+				.sub {
+					r_bp := 5
+					&Expr{
+						rhs: expr(mut l, r_bp)!,
+						op: .uneg
+					}
+				}
+				else {
+					perror("Syntax Error: expected identifier or number")!
+					0
+				}
+			}
 		}
 	}
 
@@ -193,24 +204,26 @@ fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
 	if !isnil(node.rhs) {
 		gen(node.rhs, mut prg, mut symtable)!
 
-		if node.lhs.op == .num {
-			prg.comment('mov rcx, rax')
-			prg.code << [u8(0x48), 0x89, 0xC1]
+		if !isnil(node.lhs) {
+			if node.lhs.op == .num {
+				prg.comment('mov rcx, rax')
+				prg.code << [u8(0x48), 0x89, 0xC1]
 
-			prg.mov64_rax(node.lhs.val.i64())
-		} else if node.lhs.op == .ident {
-			prg.comment('mov rcx, rax')
-			prg.code << [u8(0x48), 0x89, 0xC1]
+				prg.mov64_rax(node.lhs.val.i64())
+			} else if node.lhs.op == .ident {
+				prg.comment('mov rcx, rax')
+				prg.code << [u8(0x48), 0x89, 0xC1]
 
-			var_to_rax(mut prg, mut symtable, node.lhs.val)
-		} else {
-			prg.comment('push rax')
-			prg.code << 0x50
-			
-			gen(node.lhs, mut prg, mut symtable)!
+				var_to_rax(mut prg, mut symtable, node.lhs.val)
+			} else {
+				prg.comment('push rax')
+				prg.code << 0x50
+				
+				gen(node.lhs, mut prg, mut symtable)!
 
-			prg.comment('pop rcx')
-			prg.code << 0x59
+				prg.comment('pop rcx')
+				prg.code << 0x59
+			}
 		}
 
 		match node.op {
@@ -235,6 +248,10 @@ fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
 					prg.comment('mov rax, rdx')
 					prg.code << [u8(0x48), 0x89, 0xD0]
 				}
+			}
+			.uneg {
+				prg.comment('neg rax')
+				prg.code << [u8(0x48), 0xF7, 0xD8]
 			}
 			else {
 				panic("unreachable")
