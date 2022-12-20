@@ -1,6 +1,10 @@
 import readline
 import term
 
+/* $if !x64 {
+	$compile_error('Program is only compatible with x86_64 CPUs')
+} */
+
 enum Op { eof uneg ident assign obr cbr num add sub mul div mod }
 
 struct Lexer {
@@ -170,14 +174,16 @@ struct Box[T] {
 	v T
 }
 
-fn var_to_rax(mut prg JitProgram, mut symtable map[string]&Box[i64], val string) {
+type Symtable = map[string]&Box[i64]
+
+fn var_to_rax(mut prg JitProgram, mut symtable Symtable, val string) {
 	prg.mov64_rax(voidptr(symtable[val]))
 	prg.comments.last().comment = 'mov rax, &${val}'
 	prg.comment("mov rax, [rax]")
 	prg.code << [u8(0x48), 0x8B, 0x00]
 }
 
-fn gen(node &Expr, mut prg JitProgram, mut symtable map[string]&Box[i64])! {
+fn gen(node &Expr, mut prg JitProgram, mut symtable Symtable)! {
 	match node.op {
 		.num {
 			prg.mov64_rax(node.val.i64())
