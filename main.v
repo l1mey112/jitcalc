@@ -13,7 +13,7 @@ mut:
 	peek_lit string
 }
 
-fn (mut l Lexer) get() (Op, string) {
+fn (mut l Lexer) get() !(Op, string) {
 	for l.pos < l.line.len {
 		mut ch := l.line[l.pos]
 		l.pos++
@@ -34,6 +34,10 @@ fn (mut l Lexer) get() (Op, string) {
 
 				l.pos--
 				start := l.pos
+				ch = l.line[l.pos]
+				if !((ch >= `a` && ch <= `z`) || (ch >= `A` && ch <= `Z`) || (ch >= `0` && ch <= `9`) || ch == `_`) {
+					return error("Syntax Error: unknown character `${ch.ascii_str()}`")
+				}
 				for l.pos < l.line.len {
 					ch = l.line[l.pos]
 					if (ch >= `a` && ch <= `z`) || (ch >= `A` && ch <= `Z`) || (ch >= `0` && ch <= `9`) || ch == `_` {				
@@ -59,9 +63,9 @@ fn (mut l Lexer) get() (Op, string) {
 	return Op.eof, ''
 }
 
-fn (mut l Lexer) next() Op {
+fn (mut l Lexer) next() !Op {
 	l.tok, l.tok_lit = l.peek, l.peek_lit
-	l.peek, l.peek_lit = l.get()
+	l.peek, l.peek_lit = l.get()!
 	return l.tok
 }
 
@@ -77,14 +81,14 @@ fn perror(msg string)! {
 }
 
 fn expr(mut l Lexer, min_bp int) !&Expr {
-	l.next()
+	l.next()!
 	mut lhs := match l.tok {
 		.num, .ident {
 			&Expr{op: l.tok, val: l.tok_lit}
 		}
 		.obr {
 			o_lhs := expr(mut l, 0)!
-			if l.next() != .cbr {
+			if l.next()! != .cbr {
 				perror("Syntax Error: expected closing brace")!
 			}
 			o_lhs
@@ -92,7 +96,7 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 		else {
 			match l.tok {
 				.sub {
-					r_bp := 5
+					r_bp := 7
 					&Expr{
 						rhs: expr(mut l, r_bp)!,
 						op: .uneg
@@ -128,7 +132,7 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 		if l_bp < min_bp {
 			break
 		}
-		l.next()
+		l.next()!
 		
 		op := l.tok
 		lhs = &Expr{
@@ -291,7 +295,7 @@ fn main() {
 		mut l := Lexer {
 			line: line
 		}
-		l.next()
+		l.next()!
 		if l.peek == .eof {
 			continue
 		}
