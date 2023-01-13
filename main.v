@@ -80,10 +80,6 @@ struct Expr {
 	val string
 }
 
-fn perror(msg string)! {
-	return error(msg)
-}
-
 fn expr(mut l Lexer, min_bp int) !&Expr {
 	l.next()!
 	mut lhs := match l.tok {
@@ -93,7 +89,7 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 		.obr {
 			o_lhs := expr(mut l, 0)!
 			if l.next()! != .cbr {
-				perror("Syntax Error: expected closing brace")!
+				return error("Syntax Error: expected closing brace")
 			}
 			o_lhs
 		}
@@ -107,8 +103,7 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 					}
 				}
 				else {
-					perror("Syntax Error: expected identifier or number")!
-					0
+					return error("Syntax Error: expected identifier or number")
 				}
 			}
 		}
@@ -128,9 +123,7 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 			.add, .sub       { 3, 4 }
 			.mul, .div, .mod { 5, 6 }
 			else {
-				perror("Syntax Error: expected operator")!
-				0, 0
-				// return error("Syntax Error: expected operator after value literal")
+				return error("Syntax Error: expected operator after value literal")
 			}
 		}
 		if l_bp < min_bp {
@@ -150,6 +143,9 @@ fn expr(mut l Lexer, min_bp int) !&Expr {
 }
 
 fn march(node &Expr, dep int) {
+	if isnil(node) {
+		return
+	}
 	if dep != 0 {
 		c := dep - 1
 		print("${` `.repeat(c * 3)}└─ ")
@@ -162,12 +158,8 @@ fn march(node &Expr, dep int) {
 			println(node.op)
 		}
 	}
-	if !isnil(node.lhs) {
-		march(node.lhs, dep + 1)
-	}
-	if !isnil(node.rhs) {
-		march(node.rhs, dep + 1)
-	}
+	march(node.lhs, dep + 1)
+	march(node.rhs, dep + 1)
 }
 
 struct Box[T] {
@@ -175,13 +167,6 @@ struct Box[T] {
 }
 
 type Symtable = map[string]&Box[i64]
-
-fn var_to_rax(mut prg JitProgram, mut symtable Symtable, val string) {
-	prg.mov64_rax(voidptr(symtable[val]))
-	prg.comments.last().comment = 'mov rax, &${val}'
-	prg.comment("mov rax, [rax]")
-	prg.code << [u8(0x48), 0x8B, 0x00]
-}
 
 fn gen(node &Expr, mut prg JitProgram, mut symtable Symtable)! {
 	match node.op {
@@ -192,7 +177,7 @@ fn gen(node &Expr, mut prg JitProgram, mut symtable Symtable)! {
 		.assign {
 			gen(node.rhs, mut prg, mut symtable)!
 			if node.lhs.val !in symtable {
-				symtable[node.lhs.val] = &Box[i64]{ v: 0 }
+				symtable[node.lhs.val] = &Box[i64]{}
 			}
 			prg.mov64_rcx(voidptr(&symtable[node.lhs.val].v))
 			prg.comments.last().comment = 'mov rcx, &${node.lhs.val}'
@@ -205,68 +190,75 @@ fn gen(node &Expr, mut prg JitProgram, mut symtable Symtable)! {
 			if node.val !in symtable {
 				return error("Gen: identifier `${node.val}` not defined")
 			}
-
-			var_to_rax(mut prg, mut symtable, node.val)
+			prg.mov64_rax(voidptr(&symtable[node.val].v))
+			prg.comments.last().comment = 'mov rax, &${node.val}'
+			prg.comment("mov rax, [rax]")
+			prg.code << [u8(0x48), 0x8B, 0x00]
 			return
 		}
 		else {}
 	}
-	if !isnil(node.rhs) {
-		gen(node.rhs, mut prg, mut symtable)!
+	
+	gen(node.rhs, mut prg, mut symtable)!
 
-		if !isnil(node.lhs) {
-			if node.lhs.op == .num {
-				prg.comment('mov rcx, rax')
-				prg.code << [u8(0x48), 0x89, 0xC1]
+	if node.op == .uneg {
+		prg.comment('neg rax')
+		prg.code << [u8(0x48), 0xF7, 0xD8]
+		return
+	}
 
-				prg.mov64_rax(node.lhs.val.i64())
-			} else if node.lhs.op == .ident {
-				prg.comment('mov rcx, rax')
-				prg.code << [u8(0x48), 0x89, 0xC1]
+	prg.comment('push rax')
+	prg.code << 0x50
 
-				var_to_rax(mut prg, mut symtable, node.lhs.val)
-			} else {
-				prg.comment('push rax')
-				prg.code << 0x50
-				
-				gen(node.lhs, mut prg, mut symtable)!
+	gen(node.lhs, mut prg, mut symtable)!
 
-				prg.comment('pop rcx')
-				prg.code << 0x59
+	prg.comment('pop rcx')
+	prg.code << 0x59
+
+	match node.op {
+		.add {
+			prg.comment('add rax, rcx')
+			prg.code << [u8(0x48), 0x01, 0xC8]
+		}
+		.sub {
+			prg.comment('sub rax, rcx')
+			prg.code << [u8(0x48), 0x29, 0xC8]
+		}
+		.mul {
+			prg.comment('imul rax, rcx')
+			prg.code << [u8(0x48), 0x0F, 0xAF, 0xC1]
+		}
+		.div, .mod {
+			prg.comment('cqo')
+			prg.code << [u8(0x48), 0x99]
+			prg.comment('idiv rcx')
+			prg.code << [u8(0x48), 0xF7, 0xF9]
+			if node.op == .mod {
+				prg.comment('mov rax, rdx')
+				prg.code << [u8(0x48), 0x89, 0xD0]
 			}
 		}
-
-		match node.op {
-			.add {
-				prg.comment('add rax, rcx')
-				prg.code << [u8(0x48), 0x01, 0xC8]
-			}
-			.sub {
-				prg.comment('sub rax, rcx')
-				prg.code << [u8(0x48), 0x29, 0xC8]
-			}
-			.mul {
-				prg.comment('imul rax, rcx')
-				prg.code << [u8(0x48), 0x0F, 0xAF, 0xC1]
-			}
-			.div, .mod {
-				prg.comment('cqo')
-				prg.code << [u8(0x48), 0x99]
-				prg.comment('idiv rcx')
-				prg.code << [u8(0x48), 0xF7, 0xF9]
-				if node.op == .mod {
-					prg.comment('mov rax, rdx')
-					prg.code << [u8(0x48), 0x89, 0xD0]
-				}
-			}
-			.uneg {
-				prg.comment('neg rax')
-				prg.code << [u8(0x48), 0xF7, 0xD8]
-			}
-			else {
-				panic("unreachable")
-			}
+		else {
+			panic("unreachable")
 		}
+	}
+}
+
+fn eval(node &Expr, mut symtable map[string]i64) i64 {
+	return match node.op {
+		.ident  { symtable[node.val] }
+		.num    { node.val.i64() }
+		.uneg   { -eval(node.rhs, mut symtable) }
+		.add    { eval(node.lhs, mut symtable) + eval(node.rhs, mut symtable) }
+		.sub    { eval(node.lhs, mut symtable) - eval(node.rhs, mut symtable) }
+		.mul    { eval(node.lhs, mut symtable) * eval(node.rhs, mut symtable) }
+		.div    { eval(node.lhs, mut symtable) / eval(node.rhs, mut symtable) }
+		.mod    { eval(node.lhs, mut symtable) % eval(node.rhs, mut symtable) }
+		.assign {
+			symtable[node.lhs.val] = eval(node.rhs, mut symtable)
+			symtable[node.lhs.val]
+		}
+		else { panic("unreachable") }
 	}
 }
 
@@ -310,7 +302,8 @@ fn main() {
 			continue
 		}
 		if l.peek != .eof {
-			panic("ee")
+			println(term.fail_message("Syntax Error: trailing tokens after expression"))
+			continue
 		}
 		gen(root, mut prg, mut symtable) or {
 			println(term.fail_message(err.str()))
