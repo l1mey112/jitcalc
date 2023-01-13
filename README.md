@@ -17,6 +17,8 @@ After each line a hexdump and x86_64 assembly instructions are listed on the lef
 
 Variables can be declared and assigned, and are preserved between expressions. Use the `reset` command to reset the symbol table.
 
+### [Want to read more? Check out the article on `l-m.dev` here!](https://l-m.dev/cs/jitcalc/)
+
 <div align="center">
 
 # code
